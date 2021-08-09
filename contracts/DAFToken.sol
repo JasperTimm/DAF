@@ -1,32 +1,50 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.0;
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
+pragma solidity >=0.7.5;
+pragma abicoder v2;
 
-contract DAFToken is ERC20Votes {
+import "@openzeppelin/contracts/token/ERC20/ERC20Snapshot.sol";
+import "@openzeppelin/contracts/utils/EnumerableSet.sol";
+import '@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol';
+import '@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol';
+import '@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol';
+import './DAFVoting.sol';
 
-    uint256 constant public SHARE_DECIMAL = 1e8;
+contract DAFToken is ERC20Snapshot {
+
+    using EnumerableSet for EnumerableSet.UintSet;
+
+    uint256 constant public SHARE_FACTOR = 1e8;
+    uint256 constant public BUY_SLIP_FACTOR = 110000000;
+    uint32 constant public TWAP_PERIOD = 60; // 1 minute
+
+    DAFVoting dafVoting;
 
     struct Holding{
         ERC20 tokenAddr;
         uint256 holdingShare;
-        uint256 priceInStable;
-        //TODO: A contract which allows for a price lookup priceInStable for each token
+        address swapPool;
     }
 
-    Holding[] public holdings;
+    uint256 holdingIndex;
+    EnumerableSet.UintSet private holdingSet;
+    mapping(uint256 => Holding) public holdingMap;
     ERC20 public stableToken;
     uint256 stableTokenShare;
 
-    constructor(string memory _name, string memory _symbol, address _stableToken) ERC20(_name, _symbol) ERC20Permit(_name) {
+    ISwapRouter public constant uniswapRouter = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
+
+    constructor(string memory _name, string memory _symbol, address _stableToken) ERC20(_name, _symbol) {
         stableToken = ERC20(_stableToken);
-        stableTokenShare = 1 * SHARE_DECIMAL;
+        stableTokenShare = 1 * SHARE_FACTOR;
+        dafVoting = new DAFVoting(address(this));
     }
 
-    function buy(uint256 _amt) external payable {
-        //buy tokens
-        stableToken.transferFrom(msg.sender, address(this), _amt);
-        _mint(msg.sender, _amt);
+    function buy(uint256 _stableAmt) external payable {
+        stableToken.transferFrom(msg.sender, address(this), _stableAmt);
+        //Need to work out current token price in stable and only mint that amount
+        uint256 mintAmt = totalSupply() == 0 ? (_stableAmt * 10 ** decimals()) / (10 ** stableToken.decimals()) : (_stableAmt * totalSupply()) / totalValInStable();
+        _mint(msg.sender, mintAmt);
     }
 
     function sellStable() external {
@@ -36,60 +54,90 @@ contract DAFToken is ERC20Votes {
     function sellSwap() external {
         //swap msg.sender's share of each holding to stableToken and transfer final amount
         //TODO: Sell only a proportion of msg.sender's tokens?
-        uint256 senderShare = balanceOf(msg.sender);
-        _burn(msg.sender, senderShare);
-        stableToken.transfer(msg.sender, (stableToken.balanceOf(address(this)) * senderShare) / totalSupply());
-        uint256 initStableBalance = stableToken.balanceOf(address(this)); 
-        for (uint i=0; i < holdings.length; i++) {
-            sellToken(holdings[i].tokenAddr, (holdings[i].tokenAddr.balanceOf(address(this)) * senderShare) / totalSupply());
+        uint256 senderAmt = balanceOf(msg.sender);
+        _burn(msg.sender, senderAmt);
+        stableToken.transfer(msg.sender, (stableToken.balanceOf(address(this)) * senderAmt) / totalSupply());
+        uint256 stableProceeds = 0; 
+        for (uint i=0; i < holdingSet.length(); i++) {
+            stableProceeds += sellToken(i, (holdingMap[holdingSet.at(i)].tokenAddr.balanceOf(address(this)) * senderAmt) / totalSupply());
         }
-        stableToken.transfer(msg.sender, stableToken.balanceOf(address(this)) - initStableBalance);        
-    }
-
-    //sell a certain amt of tokenAddr for stableToken
-    function sellToken(ERC20 tokenAddr, uint256 amt) internal {
-
+        stableToken.transfer(msg.sender, stableProceeds);        
     }
 
     //buy a certain amt of tokenAddr with stableToken
-    function buyToken(ERC20 tokenAddr, uint256 amt) internal {
+    //amt is given in stable
+    function buyToken(uint256 _holdingId, uint256 _stableAmt) internal returns(uint256 holdingAmt) {
+        stableToken.approve(address(uniswapRouter), _stableAmt);
+        ISwapRouter.ExactInputSingleParams memory params =
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: address(stableToken),
+                tokenOut: address(holdingMap[_holdingId].tokenAddr),
+                fee: IUniswapV3Pool(holdingMap[_holdingId].swapPool).fee(),
+                recipient: address(this),
+                deadline: block.timestamp + 3600,
+                amountIn: _stableAmt,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
+            });
 
+        holdingAmt = uniswapRouter.exactInputSingle(params);
+    }
+
+    //sell a certain amt of tokenAddr for stableToken
+    function sellToken(uint256 _holdingId, uint256 _holdingAmt) internal returns(uint256 stableAmt) {
+        holdingMap[_holdingId].tokenAddr.approve(address(uniswapRouter), _holdingAmt);
+        ISwapRouter.ExactInputSingleParams memory params =
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: address(holdingMap[_holdingId].tokenAddr),
+                tokenOut: address(stableToken),
+                fee: IUniswapV3Pool(holdingMap[_holdingId].swapPool).fee(),
+                recipient: address(this),
+                deadline: block.timestamp + 3600,
+                amountIn: _holdingAmt,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
+            });
+
+        stableAmt = uniswapRouter.exactInputSingle(params);
     }
 
     function sellTransfer() external {
         //transfer msg.sender's share of stableToken and each Holding
         //TODO: Sell only a proportion of msg.sender's tokens?
-        uint256 senderShare = balanceOf(msg.sender);
-        _burn(msg.sender, senderShare);
-        stableToken.transfer(msg.sender, (stableToken.balanceOf(address(this)) * senderShare) / totalSupply()); 
-        for (uint i=0; i < holdings.length; i++) {
-            holdings[i].tokenAddr.transfer(msg.sender, (holdings[i].tokenAddr.balanceOf(address(this)) * senderShare) / totalSupply());
+        uint256 senderAmt = balanceOf(msg.sender);
+        _burn(msg.sender, senderAmt);
+        stableToken.transfer(msg.sender, (stableToken.balanceOf(address(this)) * senderAmt) / totalSupply()); 
+        for (uint i=0; i < holdingSet.length(); i++) {
+            holdingMap[i].tokenAddr.transfer(msg.sender, (holdingMap[holdingSet.at(i)].tokenAddr.balanceOf(address(this)) * senderAmt) / totalSupply());
         }
     }
 
-    function updateHolding(uint256 _holdingId, uint256 _holdingShare) external {
-        require(_holdingId >= 0 && _holdingId < holdings.length, "Invalid index for _holdingId");
-        require(_holdingShare >= 0 && _holdingShare <= 1 * SHARE_DECIMAL, "Invalid _holdingShare, must be between 0 and 1");
-        require(stableTokenShare - (_holdingShare - holdings[_holdingId].holdingShare) > 0, "Not enough stableToken to increase holding");
+    function updateHolding(uint256 _holdingId, uint256 _holdingShare) external onlyDAFVoting {
+        require(holdingSet.contains(_holdingId), "Invalid index for _holdingId");
+        require(_holdingShare >= 0 && _holdingShare <= 1 * SHARE_FACTOR, "Invalid _holdingShare, must be between 0 and 1");
+        require(stableTokenShare - (_holdingShare - holdingMap[_holdingId].holdingShare) > 0, "Not enough stableToken to increase holding");
         
-        stableTokenShare = stableTokenShare - (_holdingShare - holdings[_holdingId].holdingShare);
-        holdings[_holdingId].holdingShare = _holdingShare;
+        stableTokenShare = stableTokenShare - (_holdingShare - holdingMap[_holdingId].holdingShare);
+        holdingMap[_holdingId].holdingShare = _holdingShare;
         rebalance();
         if (_holdingShare == 0) {
-            delete holdings[_holdingId];
+            delete holdingMap[_holdingId];
+            holdingSet.remove(_holdingId);
         }
     }
 
-    function newHolding(ERC20 _tokenAddr, uint256 _holdingShare /* contract for price updates */) external {
+    function newHolding(ERC20 _tokenAddr, uint256 _holdingShare, address _swapPool) external onlyDAFVoting {
         //TODO: This will need to add a bunch of things with the tokenAddr, share: price lookup contract address, maybe other things
-        require(_holdingShare >= 0 && _holdingShare <= 1 * SHARE_DECIMAL, "Invalid _holdingShare, must be between 0 and 1");
+        require(_holdingShare >= 0 && _holdingShare <= 1 * SHARE_FACTOR, "Invalid _holdingShare, must be between 0 and 1");
         require(stableTokenShare - _holdingShare > 0, "Not enough stableToken to add new holding");        
-        for (uint i=0; i < holdings.length; i++) {
-            if (holdings[i].tokenAddr == _tokenAddr) {
+        for (uint i=0; i < holdingSet.length(); i++) {
+            if (holdingMap[holdingSet.at(i)].tokenAddr == _tokenAddr) {
                 require(false, "_tokenAddr already exists in holdings, use updateHolding");
             }            
         }
-        holdings.push(Holding(_tokenAddr, _holdingShare, 1));
+        holdingMap[holdingIndex] = Holding(_tokenAddr, _holdingShare, _swapPool);
+        holdingSet.add(holdingIndex);
+        holdingIndex++;
         rebalance();
     }
 
@@ -103,13 +151,13 @@ contract DAFToken is ERC20Votes {
     // In the future, having % corridors before selling would work better. 
     function rebalance() public {
         uint256 totalVal = totalValInStable();
-        for (uint i=0; i < holdings.length; i++) {
-            uint256 expVal = (totalVal * holdings[i].holdingShare) / SHARE_DECIMAL;
-            uint256 curVal = holdings[i].tokenAddr.balanceOf(address(this)) * holdings[i].priceInStable;
-            if (curVal < expVal) {
-                buyToken(holdings[i].tokenAddr, expVal - curVal);
-            } else if (curVal > expVal) {
-                sellToken(holdings[i].tokenAddr, curVal - expVal);
+        for (uint i=0; i < holdingSet.length(); i++) {
+            uint256 expValStable = (totalVal * holdingMap[holdingSet.at(i)].holdingShare) / SHARE_FACTOR;
+            uint256 curValStable = holdingToStable(i, holdingMap[i].tokenAddr.balanceOf(address(this)));
+            if (curValStable < expValStable) {
+                buyToken(i, expValStable - curValStable);
+            } else if (curValStable > expValStable) {
+                sellToken(i, stableToHolding(i, curValStable - expValStable));
             } else {
                 continue;
             }
@@ -118,14 +166,31 @@ contract DAFToken is ERC20Votes {
 
     function totalValInStable() public view returns (uint256) {
         uint256 totalVal = stableToken.balanceOf(address(this));
-        for (uint i=0; i < holdings.length; i++) {
-            totalVal += holdings[i].tokenAddr.balanceOf(address(this)) * holdings[i].priceInStable;
+        for (uint i=0; i < holdingSet.length(); i++) {
+            totalVal += holdingToStable(i, holdingMap[holdingSet.at(i)].tokenAddr.balanceOf(address(this)));
         }
         return totalVal;
     }
 
-    function tokenPriceInStable() public view returns (uint256) {
-        return totalValInStable() / totalSupply();
+    // To keep large volumes of holdings from affecting price too much we simply look at the price 
+    // of 1 stableToken in the given holding.
+    //TODO: Should find a way to cache this
+    function oneStableAmt(uint256 _holdingId) public view returns (uint256) {
+        int24 tick = OracleLibrary.consult(holdingMap[_holdingId].swapPool, TWAP_PERIOD);
+        uint256 quoteAmt = OracleLibrary.getQuoteAtTick(tick, uint128(1 * 10 ** stableToken.decimals()), address(stableToken), address(holdingMap[_holdingId].tokenAddr));
+        return quoteAmt;
     }
 
+    function holdingToStable(uint256 _holdingId, uint256 _holdingAmt) public view returns (uint256 stableAmt) {
+        stableAmt = (_holdingAmt * 10 ** stableToken.decimals()) / oneStableAmt(_holdingId);
+    }
+
+    function stableToHolding(uint256 _holdingId, uint256 _stableAmt) public view returns (uint256 holdingAmt) {
+        holdingAmt = (_stableAmt * oneStableAmt(_holdingId)) / (10 ** stableToken.decimals());
+    }
+
+    modifier onlyDAFVoting() {
+        require(msg.sender == address(dafVoting), "This function can only be called by DAFVoting");
+        _;
+    }
 }

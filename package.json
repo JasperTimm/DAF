@@ -18,7 +18,10 @@
   },
   "homepage": "https://github.com/JasperTimm/DAF#readme",
   "dependencies": {
-    "@openzeppelin/contracts": "^4.2.0",
-    "truffle": "^5.3.14"
+    "@openzeppelin/contracts": "^3.4.1",
+    "@truffle/contract": "^4.3.26",
+    "@truffle/hdwallet-provider": "^1.4.2",
+    "@uniswap/v3-periphery": "^1.1.1",
+    "truffle": "^5.4.1"
   }
 }
