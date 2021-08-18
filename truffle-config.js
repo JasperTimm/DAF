@@ -37,7 +37,7 @@ module.exports = {
 
   console: {
     require: [
-      // "./scripts/require.js"
+      "./scripts/require.js"
     ]
   },
 
@@ -52,6 +52,7 @@ module.exports = {
      host: "127.0.0.1",     // Localhost (default: none)
      port: 8545,            // Standard Ethereum port (default: none)
      network_id: "*",       // Any network (default: none)
+     skipDryRun: true
     },
     matic: {
       provider: () => new HDWalletProvider(mnemonic, `https://polygon-mainnet.infura.io/v3/ff63b6c8329542caab20e841beba64ca`),

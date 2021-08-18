@@ -18,7 +18,7 @@ contract DAFToken is ERC20Snapshot {
     uint256 constant public BUY_SLIP_FACTOR = 110000000;
     uint32 constant public TWAP_PERIOD = 60; // 1 minute
 
-    DAFVoting dafVoting;
+    DAFVoting public dafVoting;
 
     struct Holding{
         ERC20 tokenAddr;
@@ -126,16 +126,16 @@ contract DAFToken is ERC20Snapshot {
         }
     }
 
-    function newHolding(ERC20 _tokenAddr, uint256 _holdingShare, address _swapPool) external onlyDAFVoting {
+    function newHolding(Holding memory _holding) external onlyDAFVoting {
         //TODO: This will need to add a bunch of things with the tokenAddr, share: price lookup contract address, maybe other things
-        require(_holdingShare >= 0 && _holdingShare <= 1 * SHARE_FACTOR, "Invalid _holdingShare, must be between 0 and 1");
-        require(stableTokenShare - _holdingShare > 0, "Not enough stableToken to add new holding");        
+        require(_holding.holdingShare >= 0 && _holding.holdingShare <= 1 * SHARE_FACTOR, "Invalid _holdingShare, must be between 0 and 1");
+        require(stableTokenShare - _holding.holdingShare > 0, "Not enough stableToken to add new holding");        
         for (uint i=0; i < holdingSet.length(); i++) {
-            if (holdingMap[holdingSet.at(i)].tokenAddr == _tokenAddr) {
+            if (holdingMap[holdingSet.at(i)].tokenAddr == _holding.tokenAddr) {
                 require(false, "_tokenAddr already exists in holdings, use updateHolding");
             }            
         }
-        holdingMap[holdingIndex] = Holding(_tokenAddr, _holdingShare, _swapPool);
+        holdingMap[holdingIndex] = _holding;
         holdingSet.add(holdingIndex);
         holdingIndex++;
         rebalance();
@@ -188,6 +188,10 @@ contract DAFToken is ERC20Snapshot {
     function stableToHolding(uint256 _holdingId, uint256 _stableAmt) public view returns (uint256 holdingAmt) {
         holdingAmt = (_stableAmt * oneStableAmt(_holdingId)) / (10 ** stableToken.decimals());
     }
+
+    function snapshot() onlyDAFVoting public returns (uint256) {
+        return _snapshot();
+    } 
 
     modifier onlyDAFVoting() {
         require(msg.sender == address(dafVoting), "This function can only be called by DAFVoting");
