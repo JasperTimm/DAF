@@ -11,7 +11,8 @@ module.exports = {
         with(self) {
             USDC = await ERC20.at("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
             wBTC = await ERC20.at("0x2260fac5e5542a773aa44fbcfedf7c193bc2c599")
-            DAF_TOKEN = await DAFToken.deployed()
+            factory = await DAFFactory.deployed()
+            DAF_TOKEN = await DAFToken.at(await factory.tokenList(0))
             dafVoteAddr = await DAF_TOKEN.dafVoting()
             DAF_VOTE = await DAFVoting.at(dafVoteAddr)
 
