@@ -1,5 +1,3 @@
-// const { console, console } = require("../truffle-config")
-
 const { console } = require("../truffle-config")
 
 module.exports = {
