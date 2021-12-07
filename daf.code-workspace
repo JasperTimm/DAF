@@ -9,12 +9,7 @@
 			"path": "../dafapp"
 		},
 		{
-			"name": "crypto-seo",
-			"path": "../crypto-seo"
-		},
-		{
-			"name": "contracts",
-			"path": "../../Octobay/contracts"
+			"path": "../../Octobay/app"
 		}
 	],
 	"settings": {

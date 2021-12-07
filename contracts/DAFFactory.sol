@@ -18,4 +18,8 @@ contract DAFFactory {
         tokenList.push(newToken);
         emit DAFTokenCreated(address(newToken));
     }
+
+    function getTokenCount() public view returns (uint) {
+        return tokenList.length;
+    }
 }
