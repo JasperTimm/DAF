@@ -1,13 +1,15 @@
 {
 	"folders": [
 		{
+			"name": "DAF",
 			"path": "."
 		},
 		{
-			"path": "../crypto-seo"
+			"name": "dafapp",
+			"path": "../dafapp"
 		},
 		{
-			"path": "../../Octobay/contracts"
+			"path": "../../Octobay/app"
 		}
 	],
 	"settings": {

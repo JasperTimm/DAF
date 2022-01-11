@@ -16,29 +16,12 @@ contract DAFVoting {
     mapping(uint256 => Proposal) public proposalMap;
     uint256 public proposalCount;
 
-    struct NewHoldingProposal {
-        DAFToken.Holding newHolding;
-        Proposal prop;
-    }
-
-    struct LiquidateHoldingProposal {
-        uint256 holdingId;
-        Proposal prop;
-    }
-
-    enum ProposalType {
-        newHolding,
-        liquidateHolding
-    }
-
     struct Proposal {
         address creator; // Creator of this proposal
         uint256 endDate; // timestamp for when voting closes on proposal
         uint256 voteCount; // the current vote count in terms of num tokens for proposal
         uint256 snapshotId; // ID of the snapshot of balances for the token, taken at proposal creation
-        ProposalType propType;
         DAFToken.Holding holding;
-        uint256 holdingId;
         bool executed;
         mapping (address => Vote) votesBySubmitter; // map of votes submitted for proposal by submitter
     }
@@ -56,27 +39,12 @@ contract DAFVoting {
         daf = DAFToken(_dafAddr);
     }
 
-    function proposeNewHolding(DAFToken.Holding memory _holding) external {
+    function createProposal(DAFToken.Holding memory _holding) external {
+        require(daf.checkValidHoldingChange(_holding), "Proposed holding is invalid");
         proposalMap[proposalCount].creator = msg.sender;
         proposalMap[proposalCount].endDate = block.timestamp + PROPOSAL_EXPIRY;
         proposalMap[proposalCount].snapshotId = daf.snapshot();
-        proposalMap[proposalCount].propType = ProposalType.newHolding;
         proposalMap[proposalCount].holding = _holding;
-
-        emit ProposalCreated(proposalCount);
-
-        proposalCount++;
-    }
-
-    function proposeLiquidateHolding(uint256 _holdingId) external {
-        (,uint256 holdingShare,) = daf.holdingMap(_holdingId);
-        require(holdingShare > 0, "No such holding");
-
-        proposalMap[proposalCount].creator = msg.sender;
-        proposalMap[proposalCount].endDate = block.timestamp + PROPOSAL_EXPIRY;
-        proposalMap[proposalCount].snapshotId = daf.snapshot();
-        proposalMap[proposalCount].propType = ProposalType.liquidateHolding;
-        proposalMap[proposalCount].holdingId = _holdingId;
 
         emit ProposalCreated(proposalCount);
 
@@ -97,17 +65,17 @@ contract DAFVoting {
         proposalMap[_proposalId].voteCount += bal;
     }
 
+    function senderHasVoted(uint256 _proposalId) external view returns (bool) {
+        return proposalMap[_proposalId].votesBySubmitter[msg.sender].hasVoted;
+    }
+
     function executeProposal(uint256 _proposalId) external {
         require(proposalMap[_proposalId].endDate != 0, "Proposal does not exist");
         require(!proposalMap[_proposalId].executed, "Proposal has already been executed");
-        require(proposalMap[_proposalId].voteCount >= (daf.totalSupplyAt(proposalMap[_proposalId].snapshotId) / 2), "Proposal did not pass");
+        require(proposalMap[_proposalId].voteCount >= (daf.totalSupplyAt(proposalMap[_proposalId].snapshotId) / 2), "Proposal has not passed");
+        require(daf.checkValidHoldingChange(proposalMap[_proposalId].holding), "Holding change is no longer valid");
 
-        if (proposalMap[_proposalId].propType == ProposalType.newHolding) {
-            daf.newHolding(proposalMap[_proposalId].holding);
-        } else if (proposalMap[_proposalId].propType == ProposalType.liquidateHolding) {
-            daf.updateHolding(proposalMap[_proposalId].holdingId, 0);
-        }
-
+        daf.changeHolding(proposalMap[_proposalId].holding);
         proposalMap[_proposalId].executed = true;
     }
 

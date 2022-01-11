@@ -16,6 +16,7 @@ contract DAFToken is ERC20Snapshot {
 
     uint256 constant public SHARE_FACTOR = 1e8;
     uint256 constant public BUY_SLIP_FACTOR = 110000000;
+    uint256 constant public IMMED_SELL_FACTOR = SHARE_FACTOR / 10;
     uint32 constant public TWAP_PERIOD = 60; // 1 minute
 
     DAFVoting public dafVoting;
@@ -26,42 +27,46 @@ contract DAFToken is ERC20Snapshot {
         address swapPool;
     }
 
-    uint256 holdingIndex;
+    uint256 public holdingIndex;
     EnumerableSet.UintSet private holdingSet;
     mapping(uint256 => Holding) public holdingMap;
     ERC20 public stableToken;
-    uint256 stableTokenShare;
+    uint256 public stableTokenShare;
 
     ISwapRouter public constant uniswapRouter = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
 
     constructor(string memory _name, string memory _symbol, address _stableToken) ERC20(_name, _symbol) {
         stableToken = ERC20(_stableToken);
+        //This breaks our maths otherwise, plus WHO WOULD DO THIS
+        require(stableToken.decimals() <= decimals(), "Stable tokens decimals must be less than or equal to ours");
         stableTokenShare = 1 * SHARE_FACTOR;
         dafVoting = new DAFVoting(address(this));
     }
 
     function buy(uint256 _stableAmt) external payable {
+        uint256 mintAmt = convertFromStable(_stableAmt);
         stableToken.transferFrom(msg.sender, address(this), _stableAmt);
-        //Need to work out current token price in stable and only mint that amount
-        uint256 mintAmt = totalSupply() == 0 ? (_stableAmt * 10 ** decimals()) / (10 ** stableToken.decimals()) : (_stableAmt * totalSupply()) / totalValInStable();
         _mint(msg.sender, mintAmt);
     }
 
-    function sellStable() external {
-        //TODO: Try to send msg.sender's share based on holding prices in stableToken without swaps
-    }
-
-    function sellSwap() external {
-        //swap msg.sender's share of each holding to stableToken and transfer final amount
-        //TODO: Sell only a proportion of msg.sender's tokens?
+    function sell(uint256 _amt) external {
         uint256 senderAmt = balanceOf(msg.sender);
-        _burn(msg.sender, senderAmt);
-        stableToken.transfer(msg.sender, (stableToken.balanceOf(address(this)) * senderAmt) / totalSupply());
-        uint256 stableProceeds = 0; 
-        for (uint i=0; i < holdingSet.length(); i++) {
-            stableProceeds += sellToken(i, (holdingMap[holdingSet.at(i)].tokenAddr.balanceOf(address(this)) * senderAmt) / totalSupply());
+        require(senderAmt >= _amt, "You don't have that many tokens to sell");
+        //If amtInStable is small enough, simply send the equivalent in stable and wait for a rebalance
+        //TODO: Still not a great solution, someone can continually pull this amount out till it's all gone
+        uint256 amtInStable = _amt * (totalValInStable() / totalSupply());
+        if (amtInStable / stableToken.balanceOf(address(this)) < IMMED_SELL_FACTOR / SHARE_FACTOR) {
+            _burn(msg.sender, _amt);
+            stableToken.transfer(msg.sender, amtInStable);
+        } else {
+            //Otherwise swap msg.sender's share of each holding to stableToken and transfer final amount
+            uint256 stableProceeds = stableToken.balanceOf(address(this)) * _amt / totalSupply(); 
+            for (uint i=0; i < holdingSet.length(); i++) {
+                stableProceeds += sellToken(i, holdingMap[holdingSet.at(i)].tokenAddr.balanceOf(address(this)) * _amt / totalSupply());
+            }
+            _burn(msg.sender, _amt);
+            stableToken.transfer(msg.sender, stableProceeds);        
         }
-        stableToken.transfer(msg.sender, stableProceeds);        
     }
 
     //buy a certain amt of tokenAddr with stableToken
@@ -112,13 +117,31 @@ contract DAFToken is ERC20Snapshot {
         }
     }
 
+    function existingShare(address _tokenAddr) public view returns(uint256) {
+        uint256 share = 0;
+        for (uint i=0; i < holdingSet.length(); i++) {
+            if (address(holdingMap[holdingSet.at(i)].tokenAddr) == _tokenAddr) {
+                share = holdingMap[holdingSet.at(i)].holdingShare;
+            }            
+        }        
+        return share;
+    }
+
+    function checkValidHoldingChange(Holding memory _holding) external view returns(bool) {
+        uint256 existing = existingShare(address(_holding.tokenAddr));
+        return (
+            _holding.holdingShare <= 1 * SHARE_FACTOR &&
+            _holding.holdingShare != existing &&
+            stableTokenShare - (_holding.holdingShare - existing) > 0);
+    }
+
+    // NO LONGER USED!
     function updateHolding(uint256 _holdingId, uint256 _holdingShare) external onlyDAFVoting {
         require(holdingSet.contains(_holdingId), "Invalid index for _holdingId");
         require(_holdingShare >= 0 && _holdingShare <= 1 * SHARE_FACTOR, "Invalid _holdingShare, must be between 0 and 1");
         require(stableTokenShare - (_holdingShare - holdingMap[_holdingId].holdingShare) > 0, "Not enough stableToken to increase holding");
         
         stableTokenShare = stableTokenShare - (_holdingShare - holdingMap[_holdingId].holdingShare);
-        holdingMap[_holdingId].holdingShare = _holdingShare;
         rebalance();
         if (_holdingShare == 0) {
             delete holdingMap[_holdingId];
@@ -126,19 +149,32 @@ contract DAFToken is ERC20Snapshot {
         }
     }
 
-    function newHolding(Holding memory _holding) external onlyDAFVoting {
-        //TODO: This will need to add a bunch of things with the tokenAddr, share: price lookup contract address, maybe other things
-        require(_holding.holdingShare >= 0 && _holding.holdingShare <= 1 * SHARE_FACTOR, "Invalid _holdingShare, must be between 0 and 1");
-        require(stableTokenShare - _holding.holdingShare > 0, "Not enough stableToken to add new holding");        
+    function changeHolding(Holding memory _holding) external onlyDAFVoting {
+        uint256 existingId = 0;
+        bool exists = false;
         for (uint i=0; i < holdingSet.length(); i++) {
             if (holdingMap[holdingSet.at(i)].tokenAddr == _holding.tokenAddr) {
-                require(false, "_tokenAddr already exists in holdings, use updateHolding");
+                existingId = holdingSet.at(i);
+                exists = true;
             }            
         }
-        holdingMap[holdingIndex] = _holding;
-        holdingSet.add(holdingIndex);
-        holdingIndex++;
+
+        if (!exists) {
+            stableTokenShare = stableTokenShare - _holding.holdingShare;
+            holdingMap[holdingIndex] = _holding;
+            holdingSet.add(holdingIndex);
+            holdingIndex++;
+        } else {
+            stableTokenShare = stableTokenShare - (_holding.holdingShare - holdingMap[existingId].holdingShare);
+            holdingMap[existingId].holdingShare = _holding.holdingShare;
+        }
+
         rebalance();
+
+        if (_holding.holdingShare == 0) {
+            delete holdingMap[existingId];
+            holdingSet.remove(existingId);
+        }        
     }
 
     function swapHolding(ERC20 _tokenAddr1, uint256 _holdingShare1, ERC20 _tokenAddr2, uint256 _holdingShare2) external {
@@ -170,6 +206,11 @@ contract DAFToken is ERC20Snapshot {
             totalVal += holdingToStable(i, holdingMap[holdingSet.at(i)].tokenAddr.balanceOf(address(this)));
         }
         return totalVal;
+    }
+
+    function convertFromStable(uint256 _stableAmt) public view returns (uint256) {
+        uint256 decimalRatio = (10 ** decimals()) / (10 ** stableToken.decimals());
+        return totalSupply() == 0 ? 1 * _stableAmt * decimalRatio : (totalSupply() / totalValInStable()) * _stableAmt ;
     }
 
     // To keep large volumes of holdings from affecting price too much we simply look at the price 
