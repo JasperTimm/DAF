@@ -34,7 +34,7 @@ module.exports = {
             console.log("Proposing new holding...")
             const usdcWBTCPool = "0x99ac8ca7087fa4a2a1fb6357269965a2014abc35"
             const SHARE_FACTOR = await DAF_TOKEN.SHARE_FACTOR()
-            await DAF_VOTE.proposeNewHolding({tokenAddr: wBTC.address, holdingShare: (0.5 * SHARE_FACTOR), swapPool: usdcWBTCPool})
+            await DAF_VOTE.createProposal({tokenAddr: wBTC.address, holdingShare: (0.5 * SHARE_FACTOR), swapPool: usdcWBTCPool})
             //TODO: should get the ID of the proposal created from the resp logs
             const propId = 0
             console.log(`Done! propId is ${propId}`)

@@ -22,6 +22,6 @@
     "@truffle/contract": "^4.3.26",
     "@truffle/hdwallet-provider": "^1.4.2",
     "@uniswap/v3-periphery": "^1.1.1",
-    "truffle": "^5.4.1"
+    "truffle": "^5.4.24"
   }
 }
