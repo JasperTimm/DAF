@@ -7,9 +7,6 @@
 		{
 			"name": "dafapp",
 			"path": "../dafapp"
-		},
-		{
-			"path": "../../Octobay/app"
 		}
 	],
 	"settings": {
