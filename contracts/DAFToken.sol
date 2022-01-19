@@ -37,34 +37,32 @@ contract DAFToken is ERC20Snapshot {
 
     constructor(string memory _name, string memory _symbol, address _stableToken) ERC20(_name, _symbol) {
         stableToken = ERC20(_stableToken);
-        //This breaks our maths otherwise, plus WHO WOULD DO THIS
-        require(stableToken.decimals() <= decimals(), "Stable tokens decimals must be less than or equal to ours");
         stableTokenShare = 1 * SHARE_FACTOR;
         dafVoting = new DAFVoting(address(this));
     }
 
-    function buy(uint256 _stableAmt) external payable {
-        uint256 mintAmt = convertFromStable(_stableAmt);
-        stableToken.transferFrom(msg.sender, address(this), _stableAmt);
-        _mint(msg.sender, mintAmt);
+    function buy(uint256 _tokenAmt) external payable {
+        require(_tokenAmt > 0, "Cannot buy zero");
+        stableToken.transferFrom(msg.sender, address(this), convertToStableAmt(_tokenAmt));
+        _mint(msg.sender, _tokenAmt);
     }
 
-    function sell(uint256 _amt) external {
-        uint256 senderAmt = balanceOf(msg.sender);
-        require(senderAmt >= _amt, "You don't have that many tokens to sell");
+    function sell(uint256 _tokenAmt) external {
+        require(_tokenAmt > 0, "Cannot sell zero");
+        require(balanceOf(msg.sender) >= _tokenAmt, "You don't have that many tokens to sell");
         //If amtInStable is small enough, simply send the equivalent in stable and wait for a rebalance
         //TODO: Still not a great solution, someone can continually pull this amount out till it's all gone
-        uint256 amtInStable = _amt * (totalValInStable() / totalSupply());
+        uint256 amtInStable = convertToStableAmt(_tokenAmt);
         if (amtInStable / stableToken.balanceOf(address(this)) < IMMED_SELL_FACTOR / SHARE_FACTOR) {
-            _burn(msg.sender, _amt);
+            _burn(msg.sender, _tokenAmt);
             stableToken.transfer(msg.sender, amtInStable);
         } else {
             //Otherwise swap msg.sender's share of each holding to stableToken and transfer final amount
-            uint256 stableProceeds = stableToken.balanceOf(address(this)) * _amt / totalSupply(); 
+            uint256 stableProceeds = stableToken.balanceOf(address(this)) * _tokenAmt / totalSupply(); 
             for (uint i=0; i < holdingSet.length(); i++) {
-                stableProceeds += sellToken(i, holdingMap[holdingSet.at(i)].tokenAddr.balanceOf(address(this)) * _amt / totalSupply());
+                stableProceeds += sellToken(i, holdingMap[holdingSet.at(i)].tokenAddr.balanceOf(address(this)) * _tokenAmt / totalSupply());
             }
-            _burn(msg.sender, _amt);
+            _burn(msg.sender, _tokenAmt);
             stableToken.transfer(msg.sender, stableProceeds);        
         }
     }
@@ -135,20 +133,6 @@ contract DAFToken is ERC20Snapshot {
             stableTokenShare - (_holding.holdingShare - existing) > 0);
     }
 
-    // NO LONGER USED!
-    function updateHolding(uint256 _holdingId, uint256 _holdingShare) external onlyDAFVoting {
-        require(holdingSet.contains(_holdingId), "Invalid index for _holdingId");
-        require(_holdingShare >= 0 && _holdingShare <= 1 * SHARE_FACTOR, "Invalid _holdingShare, must be between 0 and 1");
-        require(stableTokenShare - (_holdingShare - holdingMap[_holdingId].holdingShare) > 0, "Not enough stableToken to increase holding");
-        
-        stableTokenShare = stableTokenShare - (_holdingShare - holdingMap[_holdingId].holdingShare);
-        rebalance();
-        if (_holdingShare == 0) {
-            delete holdingMap[_holdingId];
-            holdingSet.remove(_holdingId);
-        }
-    }
-
     function changeHolding(Holding memory _holding) external onlyDAFVoting {
         uint256 existingId = 0;
         bool exists = false;
@@ -208,9 +192,20 @@ contract DAFToken is ERC20Snapshot {
         return totalVal;
     }
 
-    function convertFromStable(uint256 _stableAmt) public view returns (uint256) {
-        uint256 decimalRatio = (10 ** decimals()) / (10 ** stableToken.decimals());
-        return totalSupply() == 0 ? 1 * _stableAmt * decimalRatio : (totalSupply() / totalValInStable()) * _stableAmt ;
+    function convertToTokenAmt(uint256 _stableAmt) public view returns (uint256) {
+        if (totalSupply() == 0) {
+            return ( (_stableAmt * (10 ** decimals())) / 10 ** stableToken.decimals() );
+        } else {
+            return ( (_stableAmt * totalSupply()) / totalValInStable() );
+        }
+    }
+
+    function convertToStableAmt(uint256 _tokenAmt) public view returns (uint256) {
+        if (totalSupply() == 0) {
+            return ( (_tokenAmt * (10 ** stableToken.decimals())) / 10 ** decimals() );
+        } else {
+            return ( (_tokenAmt * totalValInStable()) / totalSupply() );
+        }
     }
 
     // To keep large volumes of holdings from affecting price too much we simply look at the price 
