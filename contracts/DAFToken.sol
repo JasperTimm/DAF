@@ -22,7 +22,7 @@ contract DAFToken is ERC20Snapshot {
     DAFVoting public dafVoting;
 
     struct Holding{
-        ERC20 tokenAddr;
+        ERC20 token;
         uint256 holdingShare;
         address swapPool;
     }
@@ -39,6 +39,23 @@ contract DAFToken is ERC20Snapshot {
         stableToken = ERC20(_stableToken);
         stableTokenShare = 1 * SHARE_FACTOR;
         dafVoting = new DAFVoting(address(this));
+    }
+
+    function getAllHoldings() public view returns(Holding[] memory) {
+        Holding[] memory holdings = new Holding[](holdingSet.length());
+        for (uint setId=0; setId < holdings.length; setId++) {
+            holdings[setId] = holdingMap[holdingSet.at(setId)];
+        }
+
+        return holdings;
+    }
+
+    function holdingAddr(uint _setId) public view returns(address) {
+        return address(holdingMap[holdingSet.at(_setId)].token);
+    }
+
+    function holdingBal(uint _setId) public view returns(uint256) {
+        return holdingMap[holdingSet.at(_setId)].token.balanceOf(address(this));
     }
 
     function buy(uint256 _tokenAmt) external payable {
@@ -59,8 +76,8 @@ contract DAFToken is ERC20Snapshot {
         } else {
             //Otherwise swap msg.sender's share of each holding to stableToken and transfer final amount
             uint256 stableProceeds = stableToken.balanceOf(address(this)) * _tokenAmt / totalSupply(); 
-            for (uint i=0; i < holdingSet.length(); i++) {
-                stableProceeds += sellToken(i, holdingMap[holdingSet.at(i)].tokenAddr.balanceOf(address(this)) * _tokenAmt / totalSupply());
+            for (uint setId=0; setId < holdingSet.length(); setId++) {
+                stableProceeds += sellToken(setId, holdingBal(setId) * _tokenAmt / totalSupply());
             }
             _burn(msg.sender, _tokenAmt);
             stableToken.transfer(msg.sender, stableProceeds);        
@@ -69,13 +86,13 @@ contract DAFToken is ERC20Snapshot {
 
     //buy a certain amt of tokenAddr with stableToken
     //amt is given in stable
-    function buyToken(uint256 _holdingId, uint256 _stableAmt) internal returns(uint256 holdingAmt) {
+    function buyToken(uint256 _setId, uint256 _stableAmt) internal returns(uint256 holdingAmt) {
         stableToken.approve(address(uniswapRouter), _stableAmt);
         ISwapRouter.ExactInputSingleParams memory params =
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: address(stableToken),
-                tokenOut: address(holdingMap[_holdingId].tokenAddr),
-                fee: IUniswapV3Pool(holdingMap[_holdingId].swapPool).fee(),
+                tokenOut: holdingAddr(_setId),
+                fee: IUniswapV3Pool(holdingMap[holdingSet.at(_setId)].swapPool).fee(),
                 recipient: address(this),
                 deadline: block.timestamp + 3600,
                 amountIn: _stableAmt,
@@ -87,13 +104,13 @@ contract DAFToken is ERC20Snapshot {
     }
 
     //sell a certain amt of tokenAddr for stableToken
-    function sellToken(uint256 _holdingId, uint256 _holdingAmt) internal returns(uint256 stableAmt) {
-        holdingMap[_holdingId].tokenAddr.approve(address(uniswapRouter), _holdingAmt);
+    function sellToken(uint256 _setId, uint256 _holdingAmt) internal returns(uint256 stableAmt) {
+        holdingMap[holdingSet.at(_setId)].token.approve(address(uniswapRouter), _holdingAmt);
         ISwapRouter.ExactInputSingleParams memory params =
             ISwapRouter.ExactInputSingleParams({
-                tokenIn: address(holdingMap[_holdingId].tokenAddr),
+                tokenIn: holdingAddr(_setId),
                 tokenOut: address(stableToken),
-                fee: IUniswapV3Pool(holdingMap[_holdingId].swapPool).fee(),
+                fee: IUniswapV3Pool(holdingMap[holdingSet.at(_setId)].swapPool).fee(),
                 recipient: address(this),
                 deadline: block.timestamp + 3600,
                 amountIn: _holdingAmt,
@@ -110,23 +127,23 @@ contract DAFToken is ERC20Snapshot {
         uint256 senderAmt = balanceOf(msg.sender);
         _burn(msg.sender, senderAmt);
         stableToken.transfer(msg.sender, (stableToken.balanceOf(address(this)) * senderAmt) / totalSupply()); 
-        for (uint i=0; i < holdingSet.length(); i++) {
-            holdingMap[i].tokenAddr.transfer(msg.sender, (holdingMap[holdingSet.at(i)].tokenAddr.balanceOf(address(this)) * senderAmt) / totalSupply());
+        for (uint setId=0; setId < holdingSet.length(); setId++) {
+            holdingMap[holdingSet.at(setId)].token.transfer(msg.sender, (holdingBal(setId) * senderAmt) / totalSupply());
         }
     }
 
     function existingShare(address _tokenAddr) public view returns(uint256) {
         uint256 share = 0;
-        for (uint i=0; i < holdingSet.length(); i++) {
-            if (address(holdingMap[holdingSet.at(i)].tokenAddr) == _tokenAddr) {
-                share = holdingMap[holdingSet.at(i)].holdingShare;
+        for (uint setId=0; setId < holdingSet.length(); setId++) {
+            if (holdingAddr(setId) == _tokenAddr) {
+                share = holdingMap[holdingSet.at(setId)].holdingShare;
             }            
         }        
         return share;
     }
 
     function checkValidHoldingChange(Holding memory _holding) external view returns(bool) {
-        uint256 existing = existingShare(address(_holding.tokenAddr));
+        uint256 existing = existingShare(address(_holding.token));
         return (
             _holding.holdingShare <= 1 * SHARE_FACTOR &&
             _holding.holdingShare != existing &&
@@ -136,9 +153,9 @@ contract DAFToken is ERC20Snapshot {
     function changeHolding(Holding memory _holding) external onlyDAFVoting {
         uint256 existingId = 0;
         bool exists = false;
-        for (uint i=0; i < holdingSet.length(); i++) {
-            if (holdingMap[holdingSet.at(i)].tokenAddr == _holding.tokenAddr) {
-                existingId = holdingSet.at(i);
+        for (uint setId=0; setId < holdingSet.length(); setId++) {
+            if (holdingAddr(setId) == address(_holding.token)) {
+                existingId = holdingSet.at(setId);
                 exists = true;
             }            
         }
@@ -171,13 +188,13 @@ contract DAFToken is ERC20Snapshot {
     // In the future, having % corridors before selling would work better. 
     function rebalance() public {
         uint256 totalVal = totalValInStable();
-        for (uint i=0; i < holdingSet.length(); i++) {
-            uint256 expValStable = (totalVal * holdingMap[holdingSet.at(i)].holdingShare) / SHARE_FACTOR;
-            uint256 curValStable = holdingToStable(i, holdingMap[i].tokenAddr.balanceOf(address(this)));
+        for (uint setId=0; setId < holdingSet.length(); setId++) {
+            uint256 expValStable = (totalVal * holdingMap[holdingSet.at(setId)].holdingShare) / SHARE_FACTOR;
+            uint256 curValStable = holdingToStable(setId);
             if (curValStable < expValStable) {
-                buyToken(i, expValStable - curValStable);
+                buyToken(setId, expValStable - curValStable);
             } else if (curValStable > expValStable) {
-                sellToken(i, stableToHolding(i, curValStable - expValStable));
+                sellToken(setId, stableToHolding(setId, curValStable - expValStable));
             } else {
                 continue;
             }
@@ -186,8 +203,8 @@ contract DAFToken is ERC20Snapshot {
 
     function totalValInStable() public view returns (uint256) {
         uint256 totalVal = stableToken.balanceOf(address(this));
-        for (uint i=0; i < holdingSet.length(); i++) {
-            totalVal += holdingToStable(i, holdingMap[holdingSet.at(i)].tokenAddr.balanceOf(address(this)));
+        for (uint setId=0; setId < holdingSet.length(); setId++) {
+            totalVal += holdingToStable(setId);
         }
         return totalVal;
     }
@@ -211,18 +228,18 @@ contract DAFToken is ERC20Snapshot {
     // To keep large volumes of holdings from affecting price too much we simply look at the price 
     // of 1 stableToken in the given holding.
     //TODO: Should find a way to cache this
-    function oneStableAmt(uint256 _holdingId) public view returns (uint256) {
-        int24 tick = OracleLibrary.consult(holdingMap[_holdingId].swapPool, TWAP_PERIOD);
-        uint256 quoteAmt = OracleLibrary.getQuoteAtTick(tick, uint128(1 * 10 ** stableToken.decimals()), address(stableToken), address(holdingMap[_holdingId].tokenAddr));
+    function oneStableAmt(uint256 _setId) public view returns (uint256) {
+        int24 tick = OracleLibrary.consult(holdingMap[holdingSet.at(_setId)].swapPool, TWAP_PERIOD);
+        uint256 quoteAmt = OracleLibrary.getQuoteAtTick(tick, uint128(1 * 10 ** stableToken.decimals()), address(stableToken), holdingAddr(_setId));
         return quoteAmt;
     }
 
-    function holdingToStable(uint256 _holdingId, uint256 _holdingAmt) public view returns (uint256 stableAmt) {
-        stableAmt = (_holdingAmt * 10 ** stableToken.decimals()) / oneStableAmt(_holdingId);
+    function holdingToStable(uint256 _setId) public view returns (uint256 stableAmt) {
+        stableAmt = (holdingBal(_setId) * 10 ** stableToken.decimals()) / oneStableAmt(_setId);
     }
 
-    function stableToHolding(uint256 _holdingId, uint256 _stableAmt) public view returns (uint256 holdingAmt) {
-        holdingAmt = (_stableAmt * oneStableAmt(_holdingId)) / (10 ** stableToken.decimals());
+    function stableToHolding(uint256 _setId, uint256 _stableAmt) public view returns (uint256 holdingAmt) {
+        holdingAmt = (_stableAmt * oneStableAmt(_setId)) / (10 ** stableToken.decimals());
     }
 
     function snapshot() onlyDAFVoting public returns (uint256) {
