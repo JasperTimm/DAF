@@ -13,7 +13,9 @@ contract DAFVoting {
     DAFToken daf;
     uint256 constant public PROPOSAL_EXPIRY = 1 days;
 
+    //Not deleting any proposals or voteMaps at the moment but we could
     mapping(uint256 => Proposal) public proposalMap;
+    mapping(uint256 => mapping(address => Vote)) public votingMaps;
     uint256 public proposalCount;
 
     struct Proposal {
@@ -23,7 +25,6 @@ contract DAFVoting {
         uint256 snapshotId; // ID of the snapshot of balances for the token, taken at proposal creation
         DAFToken.Holding holding;
         bool executed;
-        mapping (address => Vote) votesBySubmitter; // map of votes submitted for proposal by submitter
     }
 
     struct Vote {
@@ -32,21 +33,32 @@ contract DAFVoting {
     }
 
     event ProposalCreated (
-        uint256 proposalId
+        uint256 proposalId,
+        address swapPool
     );
 
     constructor(address _dafAddr) {
         daf = DAFToken(_dafAddr);
     }
 
+    function getAllProposals() public view returns(Proposal[] memory) {
+        Proposal[] memory proposals = new Proposal[](proposalCount);
+        for (uint proposalId=0; proposalId < proposalCount; proposalId++) {
+            proposals[proposalId] = proposalMap[proposalId];
+        }
+
+        return proposals;
+    }
+
     function createProposal(DAFToken.Holding memory _holding) external {
+        require(daf.balanceOf(msg.sender) > 0, "Must have some tokens to create proposal");
         require(daf.checkValidHoldingChange(_holding), "Proposed holding is invalid");
         proposalMap[proposalCount].creator = msg.sender;
         proposalMap[proposalCount].endDate = block.timestamp + PROPOSAL_EXPIRY;
         proposalMap[proposalCount].snapshotId = daf.snapshot();
         proposalMap[proposalCount].holding = _holding;
 
-        emit ProposalCreated(proposalCount);
+        emit ProposalCreated(proposalCount, _holding.swapPool);
 
         proposalCount++;
     }
@@ -56,17 +68,17 @@ contract DAFVoting {
     function voteForProposal(uint256 _proposalId) external {
         require(proposalMap[_proposalId].endDate != 0, "Proposal does not exist");
         require(block.timestamp < proposalMap[_proposalId].endDate, "Proposal has expired");
-        require(!proposalMap[_proposalId].votesBySubmitter[msg.sender].hasVoted, "Already voted on this proposal");
+        require(!votingMaps[_proposalId][msg.sender].hasVoted, "Already voted on this proposal");
         uint256 bal = daf.balanceOfAt(msg.sender, proposalMap[_proposalId].snapshotId);
         require(bal > 0, "Sender had no tokens at proposal creation");
 
-        proposalMap[_proposalId].votesBySubmitter[msg.sender].hasVoted = true;
-        proposalMap[_proposalId].votesBySubmitter[msg.sender].voteCount = bal;
+        votingMaps[_proposalId][msg.sender].hasVoted = true;
+        votingMaps[_proposalId][msg.sender].voteCount = bal;
         proposalMap[_proposalId].voteCount += bal;
     }
 
     function senderHasVoted(uint256 _proposalId) external view returns (bool) {
-        return proposalMap[_proposalId].votesBySubmitter[msg.sender].hasVoted;
+        return votingMaps[_proposalId][msg.sender].hasVoted;
     }
 
     function executeProposal(uint256 _proposalId) external {

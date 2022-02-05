@@ -9,6 +9,7 @@ import '@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol';
 import '@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol';
 import '@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol';
 import './DAFVoting.sol';
+import '../interfaces/IOracle.sol';
 
 contract DAFToken is ERC20Snapshot {
 
@@ -33,12 +34,15 @@ contract DAFToken is ERC20Snapshot {
     ERC20 public stableToken;
     uint256 public stableTokenShare;
 
-    ISwapRouter public constant uniswapRouter = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
+    ISwapRouter public router;
+    IOracle public oracle;
 
-    constructor(string memory _name, string memory _symbol, address _stableToken) ERC20(_name, _symbol) {
+    constructor(string memory _name, string memory _symbol, address _stableToken, address _router, address _oracle) ERC20(_name, _symbol) {
         stableToken = ERC20(_stableToken);
         stableTokenShare = 1 * SHARE_FACTOR;
         dafVoting = new DAFVoting(address(this));
+        router = ISwapRouter(_router);
+        oracle = IOracle(_oracle);
     }
 
     function getAllHoldings() public view returns(Holding[] memory) {
@@ -87,7 +91,7 @@ contract DAFToken is ERC20Snapshot {
     //buy a certain amt of tokenAddr with stableToken
     //amt is given in stable
     function buyToken(uint256 _setId, uint256 _stableAmt) internal returns(uint256 holdingAmt) {
-        stableToken.approve(address(uniswapRouter), _stableAmt);
+        stableToken.approve(address(router), _stableAmt);
         ISwapRouter.ExactInputSingleParams memory params =
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: address(stableToken),
@@ -100,12 +104,12 @@ contract DAFToken is ERC20Snapshot {
                 sqrtPriceLimitX96: 0
             });
 
-        holdingAmt = uniswapRouter.exactInputSingle(params);
+        holdingAmt = router.exactInputSingle(params);
     }
 
     //sell a certain amt of tokenAddr for stableToken
     function sellToken(uint256 _setId, uint256 _holdingAmt) internal returns(uint256 stableAmt) {
-        holdingMap[holdingSet.at(_setId)].token.approve(address(uniswapRouter), _holdingAmt);
+        holdingMap[holdingSet.at(_setId)].token.approve(address(router), _holdingAmt);
         ISwapRouter.ExactInputSingleParams memory params =
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: holdingAddr(_setId),
@@ -118,7 +122,7 @@ contract DAFToken is ERC20Snapshot {
                 sqrtPriceLimitX96: 0
             });
 
-        stableAmt = uniswapRouter.exactInputSingle(params);
+        stableAmt = router.exactInputSingle(params);
     }
 
     function sellTransfer() external {
@@ -142,7 +146,7 @@ contract DAFToken is ERC20Snapshot {
         return share;
     }
 
-    function checkValidHoldingChange(Holding memory _holding) external view returns(bool) {
+    function checkValidHoldingChange(Holding calldata _holding) external view returns(bool) {
         uint256 existing = existingShare(address(_holding.token));
         return (
             _holding.holdingShare <= 1 * SHARE_FACTOR &&
@@ -150,7 +154,7 @@ contract DAFToken is ERC20Snapshot {
             stableTokenShare - (_holding.holdingShare - existing) > 0);
     }
 
-    function changeHolding(Holding memory _holding) external onlyDAFVoting {
+    function changeHolding(Holding calldata _holding) external onlyDAFVoting {
         uint256 existingId = 0;
         bool exists = false;
         for (uint setId=0; setId < holdingSet.length(); setId++) {
@@ -229,7 +233,7 @@ contract DAFToken is ERC20Snapshot {
     // of 1 stableToken in the given holding.
     //TODO: Should find a way to cache this
     function oneStableAmt(uint256 _setId) public view returns (uint256) {
-        int24 tick = OracleLibrary.consult(holdingMap[holdingSet.at(_setId)].swapPool, TWAP_PERIOD);
+        int24 tick = oracle.getTick(holdingMap[holdingSet.at(_setId)].swapPool, TWAP_PERIOD);
         uint256 quoteAmt = OracleLibrary.getQuoteAtTick(tick, uint128(1 * 10 ** stableToken.decimals()), address(stableToken), holdingAddr(_setId));
         return quoteAmt;
     }
