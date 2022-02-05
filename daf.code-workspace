@@ -7,6 +7,9 @@
 		{
 			"name": "dafapp",
 			"path": "../dafapp"
+		},
+		{
+			"path": "../dafOracle"
 		}
 	],
 	"settings": {

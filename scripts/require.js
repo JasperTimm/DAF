@@ -1,4 +1,4 @@
-const { console } = require("../truffle-config")
+// const { console } = require("../truffle-config")
 
 module.exports = {
     tot: async function(token) {
@@ -10,22 +10,22 @@ module.exports = {
     init: async function(self) {
         with(self) {
             factory = await DAFFactory.deployed()
+            router = await ProxySwapRouter.deployed()
             USDC = await ERC20.at("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
             wBTC = await ERC20.at("0x2260fac5e5542a773aa44fbcfedf7c193bc2c599")
             USDC_FACTOR = 10 ** (await USDC.decimals())
             usdcWBTCPool = "0x99ac8ca7087fa4a2a1fb6357269965a2014abc35"
             bigUSDC = "0x55fe002aeff02f77364de339a1292923a15844b8"
             await USDC.transfer(accounts[0], await USDC.balanceOf(bigUSDC), {from: bigUSDC})
+            DAF_TOKEN = await DAFToken.at(await factory.tokenList(0))
+            dafVoteAddr = await DAF_TOKEN.dafVoting()
+            DAF_VOTE = await DAFVoting.at(dafVoteAddr)
 
             Object.assign(self, this)
         }       
     },
     execBuy: async function(self) {
         with(self) {
-            DAF_TOKEN = await DAFToken.at(await factory.tokenList(0))
-            dafVoteAddr = await DAF_TOKEN.dafVoting()
-            DAF_VOTE = await DAFVoting.at(dafVoteAddr)
-
             console.log("Buying DAF tokens...")
             await USDC.approve(DAF_TOKEN.address, usdcAmt)
             await DAF_TOKEN.buy(usdcAmt)
