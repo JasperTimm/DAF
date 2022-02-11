@@ -5,6 +5,7 @@ pragma abicoder v2;
 import '@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol';
 import '@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol';
 import '@uniswap/v3-periphery/contracts/SwapRouter.sol';
+import '@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol';
 import '../interfaces/IOracle.sol';
 import '@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol';
 import '@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol';
@@ -120,7 +121,13 @@ contract ProxySwapRouter is ISwapRouter, IOracle {
     function getTick(address pool, uint32 period) override public view returns (int24) {
         if (mainnetTicks[pool] == 0) {
             //Falling back to swapPool's price here if we haven't got price data from the oracle
-            (int24 tick, ) = OracleLibrary.consult(pool, period);
+            int24 tick;
+            //If the oldest observation is too recent, we just use the current tick
+            if (OracleLibrary.getOldestObservationSecondsAgo(pool) < period) {
+                (,tick,,,,,) = IUniswapV3Pool(pool).slot0();
+            } else {
+                (tick, ) = OracleLibrary.consult(pool, period);
+            }
             return tick;
         } else {
             return mainnetTicks[pool];
