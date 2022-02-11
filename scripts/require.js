@@ -1,4 +1,3 @@
-// const { console } = require("../truffle-config")
 
 module.exports = {
     tot: async function(token) {
@@ -9,6 +8,7 @@ module.exports = {
     },
     init: async function(self) {
         with(self) {
+            BN = web3.utils.BN
             factory = await DAFFactory.deployed()
             router = await ProxySwapRouter.deployed()
             USDC = await ERC20.at("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
@@ -21,18 +21,15 @@ module.exports = {
             dafVoteAddr = await DAF_TOKEN.dafVoting()
             DAF_VOTE = await DAFVoting.at(dafVoteAddr)
 
+            const dafAmt = (new BN(10)).pow(new BN(await DAF_TOKEN.decimals())).mul(new BN(1000))
+            await USDC.approve(DAF_TOKEN.address, dafAmt)
+            await DAF_TOKEN.buy(dafAmt)
+
             Object.assign(self, this)
         }       
     },
-    execBuy: async function(self) {
+    createAndExecuteProposal: async function(self) {
         with(self) {
-            console.log("Buying DAF tokens...")
-            await USDC.approve(DAF_TOKEN.address, usdcAmt)
-            await DAF_TOKEN.buy(usdcAmt)
-            console.log("Done!")
-
-            console.log("Proposing new holding...")
-            const usdcWBTCPool = "0x99ac8ca7087fa4a2a1fb6357269965a2014abc35"
             const SHARE_FACTOR = await DAF_TOKEN.SHARE_FACTOR()
             await DAF_VOTE.createProposal({tokenAddr: wBTC.address, holdingShare: (0.5 * SHARE_FACTOR), swapPool: usdcWBTCPool})
             //TODO: should get the ID of the proposal created from the resp logs
@@ -43,10 +40,6 @@ module.exports = {
 
             console.log("Voting for proposal...")
             await DAF_VOTE.voteForProposal(propId)
-            console.log("Done!")
-
-            console.log("Executing proposal...")
-            await DAF_VOTE.executeProposal(propId)
             console.log("Done!")
         }
     }
