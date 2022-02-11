@@ -4,6 +4,7 @@ pragma solidity >=0.7.5;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20Snapshot.sol";
+import '@openzeppelin/contracts/token/ERC20/SafeERC20.sol';
 import "@openzeppelin/contracts/utils/EnumerableSet.sol";
 import '@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol';
 import '@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol';
@@ -12,9 +13,10 @@ import './DAFVoting.sol';
 import '../interfaces/IOracle.sol';
 
 contract DAFToken is ERC20Snapshot {
-
+    using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.UintSet;
 
+    uint256 constant public SWAP_PRECISION = 1e8;
     uint256 constant public SHARE_FACTOR = 1e8;
     uint256 constant public BUY_SLIP_FACTOR = 110000000;
     uint256 constant public IMMED_SELL_FACTOR = SHARE_FACTOR / 10;
@@ -23,7 +25,7 @@ contract DAFToken is ERC20Snapshot {
     DAFVoting public dafVoting;
 
     struct Holding{
-        ERC20 token;
+        IERC20 token;
         uint256 holdingShare;
         address swapPool;
     }
@@ -31,14 +33,17 @@ contract DAFToken is ERC20Snapshot {
     uint256 public holdingIndex;
     EnumerableSet.UintSet private holdingSet;
     mapping(uint256 => Holding) public holdingMap;
-    ERC20 public stableToken;
+    IERC20 public stableToken;
     uint256 public stableTokenShare;
+    uint256 public initPrice;
 
     ISwapRouter public router;
     IOracle public oracle;
 
     constructor(string memory _name, string memory _symbol, address _stableToken, address _router, address _oracle) ERC20(_name, _symbol) {
-        stableToken = ERC20(_stableToken);
+        //TODO: For now we use decimal ratios to get the initial price of the token to stable
+        initPrice = (10 ** decimals()) / (10 ** ERC20(_stableToken).decimals());
+        stableToken = IERC20(_stableToken);
         stableTokenShare = 1 * SHARE_FACTOR;
         dafVoting = new DAFVoting(address(this));
         router = ISwapRouter(_router);
@@ -64,7 +69,7 @@ contract DAFToken is ERC20Snapshot {
 
     function buy(uint256 _tokenAmt) external payable {
         require(_tokenAmt > 0, "Cannot buy zero");
-        stableToken.transferFrom(msg.sender, address(this), convertToStableAmt(_tokenAmt));
+        stableToken.safeTransferFrom(msg.sender, address(this), convertToStableAmt(_tokenAmt));
         _mint(msg.sender, _tokenAmt);
     }
 
@@ -76,7 +81,7 @@ contract DAFToken is ERC20Snapshot {
         uint256 amtInStable = convertToStableAmt(_tokenAmt);
         if (amtInStable / stableToken.balanceOf(address(this)) < IMMED_SELL_FACTOR / SHARE_FACTOR) {
             _burn(msg.sender, _tokenAmt);
-            stableToken.transfer(msg.sender, amtInStable);
+            stableToken.safeTransfer(msg.sender, amtInStable);
         } else {
             //Otherwise swap msg.sender's share of each holding to stableToken and transfer final amount
             uint256 stableProceeds = stableToken.balanceOf(address(this)) * _tokenAmt / totalSupply(); 
@@ -84,14 +89,14 @@ contract DAFToken is ERC20Snapshot {
                 stableProceeds += sellToken(setId, holdingBal(setId) * _tokenAmt / totalSupply());
             }
             _burn(msg.sender, _tokenAmt);
-            stableToken.transfer(msg.sender, stableProceeds);        
+            stableToken.safeTransfer(msg.sender, stableProceeds);        
         }
     }
 
     //buy a certain amt of tokenAddr with stableToken
     //amt is given in stable
     function buyToken(uint256 _setId, uint256 _stableAmt) internal returns(uint256 holdingAmt) {
-        stableToken.approve(address(router), _stableAmt);
+        stableToken.safeIncreaseAllowance(address(router), _stableAmt);
         ISwapRouter.ExactInputSingleParams memory params =
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: address(stableToken),
@@ -109,7 +114,7 @@ contract DAFToken is ERC20Snapshot {
 
     //sell a certain amt of tokenAddr for stableToken
     function sellToken(uint256 _setId, uint256 _holdingAmt) internal returns(uint256 stableAmt) {
-        holdingMap[holdingSet.at(_setId)].token.approve(address(router), _holdingAmt);
+        holdingMap[holdingSet.at(_setId)].token.safeIncreaseAllowance(address(router), _holdingAmt);
         ISwapRouter.ExactInputSingleParams memory params =
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: holdingAddr(_setId),
@@ -130,9 +135,9 @@ contract DAFToken is ERC20Snapshot {
         //TODO: Sell only a proportion of msg.sender's tokens?
         uint256 senderAmt = balanceOf(msg.sender);
         _burn(msg.sender, senderAmt);
-        stableToken.transfer(msg.sender, (stableToken.balanceOf(address(this)) * senderAmt) / totalSupply()); 
+        stableToken.safeTransfer(msg.sender, (stableToken.balanceOf(address(this)) * senderAmt) / totalSupply()); 
         for (uint setId=0; setId < holdingSet.length(); setId++) {
-            holdingMap[holdingSet.at(setId)].token.transfer(msg.sender, (holdingBal(setId) * senderAmt) / totalSupply());
+            holdingMap[holdingSet.at(setId)].token.safeTransfer(msg.sender, (holdingBal(setId) * senderAmt) / totalSupply());
         }
     }
 
@@ -182,7 +187,7 @@ contract DAFToken is ERC20Snapshot {
         }        
     }
 
-    function swapHolding(ERC20 _tokenAddr1, uint256 _holdingShare1, ERC20 _tokenAddr2, uint256 _holdingShare2) external {
+    function swapHolding(IERC20 _tokenAddr1, uint256 _holdingShare1, IERC20 _tokenAddr2, uint256 _holdingShare2) external {
         //swap one token for another directly if it exists, otherwise via stableToken swaps
         //TODO: Need to rethink a more efficient way of doing this given a rebalance with many swaps
     }
@@ -215,7 +220,7 @@ contract DAFToken is ERC20Snapshot {
 
     function convertToTokenAmt(uint256 _stableAmt) public view returns (uint256) {
         if (totalSupply() == 0) {
-            return ( (_stableAmt * (10 ** decimals())) / 10 ** stableToken.decimals() );
+            return _stableAmt * initPrice;
         } else {
             return ( (_stableAmt * totalSupply()) / totalValInStable() );
         }
@@ -223,7 +228,7 @@ contract DAFToken is ERC20Snapshot {
 
     function convertToStableAmt(uint256 _tokenAmt) public view returns (uint256) {
         if (totalSupply() == 0) {
-            return ( (_tokenAmt * (10 ** stableToken.decimals())) / 10 ** decimals() );
+            return _tokenAmt / initPrice;
         } else {
             return ( (_tokenAmt * totalValInStable()) / totalSupply() );
         }
@@ -234,16 +239,16 @@ contract DAFToken is ERC20Snapshot {
     //TODO: Should find a way to cache this
     function oneStableAmt(uint256 _setId) public view returns (uint256) {
         int24 tick = oracle.getTick(holdingMap[holdingSet.at(_setId)].swapPool, TWAP_PERIOD);
-        uint256 quoteAmt = OracleLibrary.getQuoteAtTick(tick, uint128(1 * 10 ** stableToken.decimals()), address(stableToken), holdingAddr(_setId));
+        uint256 quoteAmt = OracleLibrary.getQuoteAtTick(tick, uint128(1 * SWAP_PRECISION), address(stableToken), holdingAddr(_setId));
         return quoteAmt;
     }
 
     function holdingToStable(uint256 _setId) public view returns (uint256 stableAmt) {
-        stableAmt = (holdingBal(_setId) * 10 ** stableToken.decimals()) / oneStableAmt(_setId);
+        stableAmt = (holdingBal(_setId) * SWAP_PRECISION) / oneStableAmt(_setId);
     }
 
     function stableToHolding(uint256 _setId, uint256 _stableAmt) public view returns (uint256 holdingAmt) {
-        holdingAmt = (_stableAmt * oneStableAmt(_setId)) / (10 ** stableToken.decimals());
+        holdingAmt = (_stableAmt * oneStableAmt(_setId)) / SWAP_PRECISION;
     }
 
     function snapshot() onlyDAFVoting public returns (uint256) {

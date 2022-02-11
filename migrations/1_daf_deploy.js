@@ -7,7 +7,7 @@ module.exports = async function (deployer, network, accounts) {
   await deployer.deploy(ProxySwapRouter)
   const router = await ProxySwapRouter.deployed()
   //ProxySwapRouter is used as both router and oracle
-  await deployer.deploy(DAFFactory, router.address, router.address)
+  await deployer.deploy(DAFFactory, router.address, router.address, {gas: 0xfffffffff})
   const factory = await DAFFactory.deployed()
   await factory.createDAFToken("DAF Token", "DAF", USDC_ADDR)
 
