@@ -83,6 +83,8 @@ contract ProxySwapRouter is ISwapRouter, IOracle {
     function exactInputSingle(ExactInputSingleParams calldata params) override external payable returns (uint256) {
         emit NewSwap(params);
 
+        require(params.amountIn > 0, "Cannot swap 0");
+
         IERC20 tokenIn = IERC20(params.tokenIn);
         IERC20 tokenOut = IERC20(params.tokenOut);        
         address swapPool = getPoolAddress(params.tokenIn, params.tokenOut, params.fee);
@@ -93,6 +95,12 @@ contract ProxySwapRouter is ISwapRouter, IOracle {
         // What do we need to satisfy the mainnet out requirement
         emit NewQuote(params.tokenIn, params.tokenOut, params.fee, mainnetAmtOut, params.sqrtPriceLimitX96);
         uint256 reqInAmt = quoter.quoteExactOutputSingle(params.tokenIn, params.tokenOut, params.fee, mainnetAmtOut, params.sqrtPriceLimitX96);
+
+        // If for some reason the swap rounds to 0 at some point, simply return here
+        if (reqInAmt == 0) {
+            return 0;
+        }
+
         tokenIn.safeTransferFrom(msg.sender, address(this), params.amountIn);
 
         uint256 amtIn = reqInAmt > tokenIn.balanceOf(address(this)) ? tokenIn.balanceOf(address(this)) : reqInAmt;

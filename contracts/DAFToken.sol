@@ -19,7 +19,7 @@ contract DAFToken is ERC20Snapshot {
     uint256 constant public SWAP_PRECISION = 1e8;
     uint256 constant public SHARE_FACTOR = 1e8;
     uint256 constant public BUY_SLIP_FACTOR = 110000000;
-    uint256 constant public IMMED_SELL_FACTOR = SHARE_FACTOR / 10;
+    uint256 constant public IMMED_SELL_FACTOR = SHARE_FACTOR / 10; // i.e 10%
     uint32 constant public TWAP_PERIOD = 60; // 1 minute
 
     DAFVoting public dafVoting;
@@ -36,13 +36,17 @@ contract DAFToken is ERC20Snapshot {
     IERC20 public stableToken;
     uint256 public stableTokenShare;
     uint256 public initPrice;
+    uint256 public rebalanceTolerance;
 
     ISwapRouter public router;
     IOracle public oracle;
 
     constructor(string memory _name, string memory _symbol, address _stableToken, address _router, address _oracle) ERC20(_name, _symbol) {
         //TODO: For now we use decimal ratios to get the initial price of the token to stable
-        initPrice = (10 ** decimals()) / (10 ** ERC20(_stableToken).decimals());
+        uint256 stableDecimals = ERC20(_stableToken).decimals();
+        initPrice = (10 ** decimals()) / (10 ** stableDecimals);
+        //TODO: Setting this to a fixed amount for now, should have this configurable by users I guess
+        rebalanceTolerance = 10 * (10 ** stableDecimals);
         stableToken = IERC20(_stableToken);
         stableTokenShare = 1 * SHARE_FACTOR;
         dafVoting = new DAFVoting(address(this));
@@ -195,15 +199,17 @@ contract DAFToken is ERC20Snapshot {
     //Rebalances fund based on holding price changes, calling is scheduled periodically (randomly)?
     //TODO: A lot of ways to rebalance. For now we'll simply make this a rebalance based on target share holding.
     // In the future, having % corridors before selling would work better. 
-    function rebalance() public {
+    function rebalance() public returns (uint256 rebalanceAmtStable) {
         uint256 totalVal = totalValInStable();
         for (uint setId=0; setId < holdingSet.length(); setId++) {
             uint256 expValStable = (totalVal * holdingMap[holdingSet.at(setId)].holdingShare) / SHARE_FACTOR;
             uint256 curValStable = holdingToStable(setId);
-            if (curValStable < expValStable) {
+            if (curValStable + rebalanceTolerance < expValStable) {
                 buyToken(setId, expValStable - curValStable);
-            } else if (curValStable > expValStable) {
+                rebalanceAmtStable += expValStable - curValStable;
+            } else if (curValStable > expValStable + rebalanceTolerance) {
                 sellToken(setId, stableToHolding(setId, curValStable - expValStable));
+                rebalanceAmtStable += curValStable - expValStable;
             } else {
                 continue;
             }
