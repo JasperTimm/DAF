@@ -4,7 +4,7 @@
   "description": "A distributed autonomous fund",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "NODE_ENV=test npx truffle test"
   },
   "repository": {
     "type": "git",
