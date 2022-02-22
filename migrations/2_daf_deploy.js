@@ -1,12 +1,12 @@
 const DAFFactory = artifacts.require("DAFFactory");
 const DAFToken = artifacts.require("DAFToken");
-const DAFVoting = artifacts.require("DAFVoting");
 const ERC20 = artifacts.require("ERC20");
 const ProxySwapRouter = artifacts.require("ProxySwapRouter");
 const USDC_ADDR = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
 
 module.exports = async function (deployer, network, accounts) {
   BN = web3.utils.BN
+  USDC = await ERC20.at(USDC_ADDR)
 
   await deployer.deploy(ProxySwapRouter)
   const router = await ProxySwapRouter.deployed()
