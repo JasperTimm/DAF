@@ -18,11 +18,11 @@
  *
  */
 
-// const HDWalletProvider = require('@truffle/hdwallet-provider');
+const HDWalletProvider = require('@truffle/hdwallet-provider');
 // const infuraKey = "fj4jll3k.....";
 //
-// const fs = require('fs');
-// const mnemonic = fs.readFileSync(".secret").toString().trim();
+const fs = require('fs');
+const mnemonic = fs.readFileSync(".secret").toString().trim();
 
 module.exports = {
   /**
@@ -54,13 +54,11 @@ module.exports = {
      network_id: "*",       // Any network (default: none)
      skipDryRun: true
     },
-    // matic: {
-    //   provider: () => new HDWalletProvider(mnemonic, `https://polygon-mainnet.infura.io/v3/ff63b6c8329542caab20e841beba64ca`),
-    //   network_id: "*",
-    //   confirmations: 2,
-    //   timeoutBlocks: 200,
-    //   skipDryRun: true
-    // },     
+    dafnet: {
+      provider: () => new HDWalletProvider(mnemonic, `https://dafnet.jaspa.codes`),
+      network_id: "*",
+      skipDryRun: true
+    },     
     // Another network with more advanced options...
     // advanced: {
     // port: 8777,             // Custom port
