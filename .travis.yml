@@ -19,4 +19,4 @@ deploy:
   provider: script
   script: bash scripts/deploy.sh
   on:
-    all_branches: true
+    branch: deploy
